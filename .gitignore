@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# Virtual environments
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Results (images/plots generated during training)
+results/*.png
+results/*.jpg
+results/*.pdf
+
+# Model files (Q-tables, trained models)
+*.pkl
+*.pickle
+*.h5
+*.pth
+
+# Data files (if you add any)
+*.csv
+*.xlsx

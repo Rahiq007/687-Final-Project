@@ -1,0 +1,7 @@
+# Core dependencies for Snake RL Environment
+numpy>=1.24.0
+pygame>=2.5.0
+matplotlib>=3.7.0
+
+# Optional but recommended
+jupyter>=1.0.0
