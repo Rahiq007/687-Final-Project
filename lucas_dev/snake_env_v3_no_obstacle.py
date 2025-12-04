@@ -1,5 +1,6 @@
 import numpy as np
 import random
+from collections import deque
 try:
     from visualize import SnakeVisualizer
 except ImportError:
@@ -11,25 +12,27 @@ except ImportError:
     except ImportError:
         SnakeVisualizer = None
 
-class SnakeEnvCNN:
+class SnakeEnvV3NoObstacle:
     """
-    Snake Game Environment for CNN
+    Snake Game Environment V3 (No Obstacles): Planning & Trap Awareness
     
-    State Representation:
-    Returns a 3-channel grid (C, H, W) -> (3, 8, 8)
-    Channel 0: Snake Head (1.0)
-    Channel 1: Snake Body (Gradient 1.0 -> 0.1) + Obstacles (-1.0)
-    Channel 2: Food (1.0)
+    State Representation (Compact):
+    1. Food Direction (8 values: 0-7)
+    2. Danger Mask (16 values: 0-15) - Immediate collision
+    3. Trap Mask (16 values: 0-15) - Dead end detection (Planning)
+    
+    Total States: 8 * 16 * 16 = 2048
     """
     
     GRID_SIZE = 8
     
-    # Rewards (Shaped for faster learning)
-    REWARD_FOOD = 12.0    # Increased back to make eating worth the risk
-    REWARD_DEATH = -10.0
-    REWARD_STEP = -0.6    # Significant step penalty to discourage loitering/circling
-    REWARD_CLOSER = 0.1   # Small guidance, but not enough to offset step penalty if circling
-    # REWARD_FARTHER removed to allow planning (moving away to avoid traps)
+    # Rewards
+    REWARD_FOOD = 20
+    REWARD_DEATH = -10
+    REWARD_STEP = -1
+    REWARD_CLOSER = 0.5
+    # REWARD_FARTHER = -0.5
+
     
     # Actions
     UP = 0
@@ -53,7 +56,7 @@ class SnakeEnvCNN:
         self.snake = []
         self.direction = None
         self.food = None
-        self.obstacles = [(2, 2), (5, 2), (2, 5), (5, 5)]
+        self.obstacles = [] # No obstacles
         self.steps = 0
         self.total_reward = 0
         self.prev_distance = 0
@@ -77,9 +80,9 @@ class SnakeEnvCNN:
             
         self._spawn_food()
         
-        hx, hy = self.snake[0]
-        fx, fy = self.food
-        self.prev_distance = abs(hx - fx) + abs(hy - fy)
+        head_x, head_y = self.snake[0]
+        food_x, food_y = self.food
+        self.prev_distance = abs(head_x - food_x) + abs(head_y - food_y)
         
         return self.get_state()
         
@@ -129,8 +132,8 @@ class SnakeEnvCNN:
             
             if curr_dist < self.prev_distance:
                 reward += self.REWARD_CLOSER
-            # No penalty for moving farther (allows planning)
-            
+            # else:
+            #     reward += self.REWARD_FARTHER
             self.prev_distance = curr_dist
             
         self.total_reward += reward
@@ -138,37 +141,96 @@ class SnakeEnvCNN:
         
     def get_state(self):
         """
-        Returns (3, 8, 8) grid
+        Returns: (food_dir, danger_mask, trap_mask)
         """
-        state = np.zeros((3, self.grid_size, self.grid_size), dtype=np.float32)
+        head_x, head_y = self.snake[0]
+        food_x, food_y = self.food
         
-        # Channel 0: Head
-        hx, hy = self.snake[0]
-        state[0, hy, hx] = 1.0
+        # 1. Food Direction (8 values)
+        dx = food_x - head_x
+        dy = food_y - head_y
         
-        # Channel 1: Body (Gradient) & Obstacles (-1.0)
-        for i, (bx, by) in enumerate(self.snake[1:], start=1):
-            # Gradient from near 1.0 (neck) to near 0.0 (tail)
-            # This helps the agent distinguish the body's direction/movement
-            # Using fixed decay so values are consistent regardless of length
-            val = max(0.1, 1.0 - (i * 0.02))
-            state[1, by, bx] = val
+        if dx == 0 and dy < 0: f_dir = 0 # N
+        elif dx > 0 and dy < 0: f_dir = 1 # NE
+        elif dx > 0 and dy == 0: f_dir = 2 # E
+        elif dx > 0 and dy > 0: f_dir = 3 # SE
+        elif dx == 0 and dy > 0: f_dir = 4 # S
+        elif dx < 0 and dy > 0: f_dir = 5 # SW
+        elif dx < 0 and dy == 0: f_dir = 6 # W
+        else: f_dir = 7 # NW
+        
+        # 2. Danger Mask (Immediate)
+        # 3. Trap Mask (Planning - BFS)
+        danger_mask = 0
+        trap_mask = 0
+        
+        # Check all 4 directions
+        directions = [
+            (0, -1, 0), # UP (bit 0)
+            (0, 1, 1),  # DOWN (bit 1)
+            (-1, 0, 2), # LEFT (bit 2)
+            (1, 0, 3)   # RIGHT (bit 3)
+        ]
+        
+        for dx, dy, bit in directions:
+            nx, ny = head_x + dx, head_y + dy
+            pos = (nx, ny)
             
-        for ox, oy in self.obstacles:
-            state[1, oy, ox] = -1.0
+            # Check Danger
+            if not self._is_valid_position(pos) or pos in self.snake:
+                danger_mask |= (1 << bit)
+                # If it's an immediate danger, it's also a "trap" in the sense you can't go there
+                trap_mask |= (1 << bit)
+            else:
+                # Check Trap (Flood Fill)
+                # If we move to 'pos', how many cells can we reach?
+                # We simulate the move: head becomes 'pos', tail moves (unless we eat, but let's assume worst case: we don't eat immediately or we grow)
+                # Conservative check: Treat current snake body as static obstacles for the flood fill
+                reachable = self._flood_fill(pos, self.snake)
+                
+                # If reachable area is smaller than current snake length, it's a trap!
+                if reachable < len(self.snake):
+                    trap_mask |= (1 << bit)
+                    
+        return (f_dir, danger_mask, trap_mask)
+
+    def _flood_fill(self, start_pos, obstacles):
+        """
+        BFS to count reachable cells from start_pos
+        """
+        queue = deque([start_pos])
+        visited = set([start_pos])
+        count = 0
+        
+        # Convert obstacles to set for O(1) lookup
+        # Note: We must treat the snake body as obstacles
+        obstacle_set = set(obstacles)
+        
+        while queue:
+            cx, cy = queue.popleft()
+            count += 1
             
-        # Channel 2: Food
-        if self.food:
-            fx, fy = self.food
-            state[2, fy, fx] = 1.0
+            # Optimization: If we already found enough space, stop
+            if count > len(self.snake) * 2: # Heuristic: if we have 2x length space, we are safe
+                return count
             
-        return state
+            for dx, dy in [(0, 1), (0, -1), (1, 0), (-1, 0)]:
+                nx, ny = cx + dx, cy + dy
+                n_pos = (nx, ny)
+                
+                if (0 <= nx < self.grid_size and 
+                    0 <= ny < self.grid_size and 
+                    n_pos not in visited and 
+                    n_pos not in obstacle_set): # Removed self.obstacles check since it's empty
+                    
+                    visited.add(n_pos)
+                    queue.append(n_pos)
+                    
+        return count
 
     def _is_valid_position(self, pos):
         x, y = pos
         if x < 0 or x >= self.grid_size or y < 0 or y >= self.grid_size:
-            return False
-        if pos in self.obstacles:
             return False
         return True
         

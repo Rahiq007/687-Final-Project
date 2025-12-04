@@ -7,7 +7,7 @@ import random
 import time
 import os
 import matplotlib.pyplot as plt
-from snake_env_cnn import SnakeEnvCNN
+from snake_env_no_obstacle import SnakeEnvNoObstacle
 
 # Check for MPS (Apple Silicon) or CUDA
 device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
@@ -41,8 +41,6 @@ class CNNAgent:
         self.epsilon_decay = epsilon_decay
         
         self.model = SimpleCNN(input_channels=3, action_size=action_size).to(device)
-        # Share memory removed for MPS compatibility
-        # self.model.share_memory()
         
         self.optimizer = optim.Adam(self.model.parameters(), lr=lr)
         self.criterion = nn.MSELoss()
@@ -69,7 +67,7 @@ class CNNAgent:
         next_state_t = torch.FloatTensor(next_state).unsqueeze(0).to(device)
         reward_t = torch.FloatTensor([reward]).to(device)
         
-        current_q = self.model(state_t)[0, action]
+        current_q = self.model(state_t)[0, action].unsqueeze(0)
         
         with torch.no_grad():
             if done:
@@ -90,7 +88,7 @@ class CNNAgent:
         if not os.path.exists("lucas_dev/models"):
             os.makedirs("lucas_dev/models")
         if filename is None:
-            filename = f"lucas_dev/models/cnn_sarsa_decay_body_{self.total_episodes}_episodes.pth"
+            filename = f"lucas_dev/models/cnn_no_obstacle_{self.total_episodes}_episodes.pth"
             
         torch.save({
             'model_state_dict': self.model.state_dict(),
@@ -132,7 +130,7 @@ def plot_training_results(agent, window_size=100):
     plt.subplot(3, 1, 1)
     plt.plot(rewards, alpha=0.3, color='blue', label='Raw')
     plt.plot(range(len(rewards)-len(moving_avg), len(rewards)), moving_avg, color='red', label='Avg')
-    plt.title(f'CNN SARSA Training (Episodes: {len(rewards)})')
+    plt.title(f'CNN No Obstacle Training (Episodes: {len(rewards)})')
     plt.ylabel('Reward')
     plt.legend()
     plt.grid(True)
@@ -167,65 +165,14 @@ def plot_training_results(agent, window_size=100):
     plt.grid(True)
     
     if not os.path.exists("lucas_dev/plots"): os.makedirs("lucas_dev/plots")
-    plt.savefig(f"lucas_dev/plots/training_plot_cnn_{len(rewards)}.png")
+    plt.savefig(f"lucas_dev/plots/training_plot_cnn_no_obstacle_neg_{len(rewards)}.png")
     plt.close()
 
-def run_episode(agent, env, epsilon):
-    """Run a single episode and return (reward, length, epsilon)"""
-    state = env.reset()
-    done = False
-    total_reward = 0
-    
-    # Local epsilon for this process
-    local_epsilon = epsilon
-    
-    while not done:
-        # Epsilon-greedy action
-        if random.random() < local_epsilon:
-            action = random.randint(0, 3)
-        else:
-            state_tensor = torch.FloatTensor(state).unsqueeze(0).to(device)
-            with torch.no_grad():
-                q_values = agent.model(state_tensor)
-            action = torch.argmax(q_values).item()
-            
-        next_state, reward, done = env.step(action)
-        
-        # Get next action for SARSA update
-        if random.random() < local_epsilon:
-            next_action = random.randint(0, 3)
-        else:
-            next_state_tensor = torch.FloatTensor(next_state).unsqueeze(0).to(device)
-            with torch.no_grad():
-                next_q = agent.model(next_state_tensor)
-            next_action = torch.argmax(next_q).item()
-            
-        # Update global model (thread-safe due to GIL/PyTorch autograd)
-        agent.update(state, action, reward, next_state, next_action, done)
-        
-        state = next_state
-        total_reward += reward
-        
-    return total_reward, len(env.snake)
-
-def train_cnn_parallel(agent=None, episodes=20000, num_workers=4):
-    # Note: True parallel training with shared gradients in PyTorch usually requires 
-    # DistributedDataParallel or Hogwild!. For simplicity and stability on Mac,
-    # we will stick to sequential execution but optimize the loop.
-    # Python's GIL limits true multi-threading for CPU-bound tasks.
-    # However, we can use multiprocessing to run environments in parallel.
-    
-    # For this specific request, I will implement a simpler "Batch" approach
-    # where we collect experiences from multiple environments and then update.
-    # But standard SARSA is on-policy, so we must update frequently.
-    
-    # Let's stick to a robust single-process loop for now but add the LENGTH tracking
-    # as requested, because true parallel RL on Mac MPS can be unstable with simple scripts.
-    
-    env = SnakeEnvCNN(render_mode='text')
+def train_cnn_parallel(agent=None, episodes=20000):
+    env = SnakeEnvNoObstacle(render_mode='text')
     if agent is None: agent = CNNAgent()
     
-    print(f"Starting CNN training for {episodes} episodes...")
+    print(f"Starting CNN training (No Obstacles) for {episodes} episodes...")
     start_time = time.time()
     
     for episode in range(episodes):
@@ -279,8 +226,8 @@ def train_cnn_parallel(agent=None, episodes=20000, num_workers=4):
     return agent
 
 def visualize_play(agent):
-    print("\nVisualizing CNN Agent...")
-    env = SnakeEnvCNN(render_mode='pygame', cell_size=60)
+    print("\nVisualizing CNN Agent (No Obstacles)...")
+    env = SnakeEnvNoObstacle(render_mode='pygame', cell_size=60)
     state = env.reset()
     env.render()
     time.sleep(1)
@@ -315,8 +262,8 @@ if __name__ == "__main__":
         pass
         
     # Train
-    # agent = train_cnn_parallel(episodes=9000)
     agent = None
-    agent = CNNAgent(load_path="lucas_dev/models/cnn_sarsa_decay_body_15000_episodes.pth")
-    # agent = train_cnn_parallel(agent=agent, episodes=5000)
+    agent = CNNAgent(load_path="/Users/xiaofanlu/Documents/github_repos/687-Final-Project/lucas_dev/models/cnn_no_obstacle_9000_episodes.pth")
+    # Since we changed the state representation (negative body), we should train from scratch
+    # agent = train_cnn_parallel(agent=agent, episodes=7100) 
     visualize_play(agent)

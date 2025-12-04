@@ -11,14 +11,14 @@ except ImportError:
     except ImportError:
         SnakeVisualizer = None
 
-class SnakeEnvCNN:
+class SnakeEnvNoObstacle:
     """
-    Snake Game Environment for CNN
+    Snake Game Environment for CNN (No Obstacles)
     
     State Representation:
     Returns a 3-channel grid (C, H, W) -> (3, 8, 8)
     Channel 0: Snake Head (1.0)
-    Channel 1: Snake Body (Gradient 1.0 -> 0.1) + Obstacles (-1.0)
+    Channel 1: Snake Body (Gradient 1.0 -> 0.1)
     Channel 2: Food (1.0)
     """
     
@@ -29,7 +29,6 @@ class SnakeEnvCNN:
     REWARD_DEATH = -10.0
     REWARD_STEP = -0.6    # Significant step penalty to discourage loitering/circling
     REWARD_CLOSER = 0.1   # Small guidance, but not enough to offset step penalty if circling
-    # REWARD_FARTHER removed to allow planning (moving away to avoid traps)
     
     # Actions
     UP = 0
@@ -53,7 +52,7 @@ class SnakeEnvCNN:
         self.snake = []
         self.direction = None
         self.food = None
-        self.obstacles = [(2, 2), (5, 2), (2, 5), (5, 5)]
+        self.obstacles = [] # No obstacles
         self.steps = 0
         self.total_reward = 0
         self.prev_distance = 0
@@ -129,7 +128,6 @@ class SnakeEnvCNN:
             
             if curr_dist < self.prev_distance:
                 reward += self.REWARD_CLOSER
-            # No penalty for moving farther (allows planning)
             
             self.prev_distance = curr_dist
             
@@ -144,18 +142,13 @@ class SnakeEnvCNN:
         
         # Channel 0: Head
         hx, hy = self.snake[0]
-        state[0, hy, hx] = 1.0
+        state[0, hy, hx] = -1.0
         
-        # Channel 1: Body (Gradient) & Obstacles (-1.0)
+        # Channel 1: Body (Gradient)
         for i, (bx, by) in enumerate(self.snake[1:], start=1):
             # Gradient from near 1.0 (neck) to near 0.0 (tail)
-            # This helps the agent distinguish the body's direction/movement
-            # Using fixed decay so values are consistent regardless of length
             val = max(0.1, 1.0 - (i * 0.02))
-            state[1, by, bx] = val
-            
-        for ox, oy in self.obstacles:
-            state[1, oy, ox] = -1.0
+            state[1, by, bx] = -val
             
         # Channel 2: Food
         if self.food:
@@ -167,8 +160,6 @@ class SnakeEnvCNN:
     def _is_valid_position(self, pos):
         x, y = pos
         if x < 0 or x >= self.grid_size or y < 0 or y >= self.grid_size:
-            return False
-        if pos in self.obstacles:
             return False
         return True
         
