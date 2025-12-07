@@ -18,11 +18,11 @@ class SnakeEnvV3:
     GRID_SIZE = 8
     
     # Rewards
-    REWARD_FOOD = 20
-    REWARD_DEATH = -10
-    REWARD_STEP = -1
-    REWARD_CLOSER = 1
-    REWARD_FARTHER = -1.5
+    REWARD_FOOD = 10
+    REWARD_DEATH = -7
+    REWARD_STEP = -0.6
+    REWARD_CLOSER = 0.5
+    REWARD_FARTHER = -0.2
     
     # Actions
     UP = 0
